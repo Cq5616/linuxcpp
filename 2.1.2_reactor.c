@@ -1,14 +1,24 @@
 #include <netinet/in.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/epoll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
 #define BUFFER_LENGTH 128
 #define EVENTS_LENGTH 128
 
-/*IO多路复用 epoll api*/
+/*reactor 模型*/
+/*epoll 面向io的写法改为面向事件 */
+
+struct conn_item {
+  int fd;
+  char buffer[BUFFER_LENGTH];
+  int idx;  // buffer当前占用了多少
+};
+
+struct conn_item conn_list[1024] = {0};
+
 int main() {
   int listenfd = socket(AF_INET, SOCK_STREAM, 0);
   if (listenfd == -1) return -1;
@@ -46,12 +56,20 @@ int main() {
         // ev.events = EPOLLIN | EPOLLET;  //边沿触发
         ev.data.fd = clientfd;
         epoll_ctl(epfd, EPOLL_CTL_ADD, clientfd, &ev);
+
+        // init conn_item
+        conn_list[clientfd].fd = clientfd;
+        memset(conn_list[clientfd].buffer, 0, BUFFER_LENGTH);
+        conn_list[clientfd].idx = 0;
+
         printf("clientfd:%d\n", clientfd);
       } else if (events[i].events & EPOLLIN)  //& means?
       {
-        char buffer[BUFFER_LENGTH] = {0};
-        int count = recv(connfd, buffer, BUFFER_LENGTH, 0);
-        if (count <= 0)  // disconnected
+        char *buffer = conn_list[connfd].buffer;
+        int idx = conn_list[connfd].idx;
+
+        int count = recv(connfd, buffer + idx, BUFFER_LENGTH - idx, 0);
+        if (count == 0)  // disconnected
         {
           printf("client:%d disconnected\n", connfd);
           epoll_ctl(epfd, EPOLL_CTL_DEL, connfd, NULL);
@@ -60,6 +78,7 @@ int main() {
           // do sth with recived data
           printf("recv from clientfd:%d, count:%d, buffer:%s\n", connfd, count,
                  buffer);
+          conn_list[connfd].idx += count;
           send(connfd, buffer, count, 0);
         }
       }
